@@ -250,6 +250,10 @@ struct NET_EXPORT QuicParams {
   // If true, a request will be sent on the existing session iff the hostname
   // matches the certificate presented during the handshake.
   bool ignore_ip_matching_when_finding_existing_sessions = false;
+
+  // Initial flow control receive window sizes for QUIC.
+  int32_t initial_stream_recv_window_size = 6 * 1024 * 1024;    // 6 MB
+  int32_t initial_session_recv_window_size = 15 * 1024 * 1024;   // 15 MB
 };
 
 // QuicContext contains QUIC-related variables that are shared across all of the
