@@ -111,6 +111,9 @@ struct URLRequestContextConfig {
       net::handles::NetworkHandle bound_network =
           net::handles::kInvalidNetworkHandle);
 
+
+  const std::optional<std::string> proxy_rules;
+
   // Enable QUIC.
   const bool enable_quic;
   // Enable SPDY.
@@ -178,7 +181,7 @@ struct URLRequestContextConfig {
   // If |bidi_stream_detect_broken_connection_| is true, this suggests the
   // period of the heartbeat signal.
   base::TimeDelta heartbeat_interval;
-
+  const std::optional<std::string> proxy_rules;
   const std::optional<cronet::proto::ProxyOptions> proxy_options;
 
   // Custom TCP dialer callback. When set, this callback will be used to
@@ -234,6 +237,7 @@ struct URLRequestContextConfig {
       // On Android, corresponds to android.os.Process.setThreadPriority()
       // values. Do not specify for other targets.
       std::optional<int> network_thread_priority,
+      std::optional<std::string> proxy_rules,
       std::optional<cronet::proto::ProxyOptions> proxy_options);
 
  private:
@@ -269,6 +273,7 @@ struct URLRequestContextConfig {
       // On Android, corresponds to android.os.Process.setThreadPriority()
       // values. Do not specify for other targets.
       std::optional<int> network_thread_priority,
+      std::optional<std::string> proxy_rules,
       std::optional<cronet::proto::ProxyOptions> proxy_options);
 
   // Parses experimental options from their JSON format to the format used
@@ -347,6 +352,7 @@ struct URLRequestContextConfigBuilder {
   // On Android, corresponds to android.os.Process.setThreadPriority() values.
   // Do not specify for other targets.
   std::optional<int> network_thread_priority;
+  std::optional<std::string> proxy_rules;
 };
 
 }  // namespace cronet
