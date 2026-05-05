@@ -111,9 +111,6 @@ struct URLRequestContextConfig {
       net::handles::NetworkHandle bound_network =
           net::handles::kInvalidNetworkHandle);
 
-
-  const std::optional<std::string> proxy_rules;
-
   // Enable QUIC.
   const bool enable_quic;
   // Enable SPDY.
