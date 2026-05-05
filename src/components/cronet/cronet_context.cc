@@ -61,6 +61,11 @@
 #include "net/nqe/network_quality_estimator_params.h"
 #include "net/proxy_resolution/configured_proxy_resolution_service.h"
 #include "net/proxy_resolution/proxy_config_service_fixed.h"
+
+#include "net/proxy_resolution/proxy_config.h"
+#include "net/proxy_resolution/proxy_config_with_annotation.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+
 #include "net/proxy_resolution/proxy_resolution_service.h"
 #include "net/third_party/quiche/src/quiche/quic/core/quic_versions.h"
 #include "net/url_request/url_request_context.h"
@@ -371,8 +376,27 @@ CronetContext::NetworkTasks::BuildDefaultURLRequestContext(
 
   // Use direct connection (no proxy). This avoids creating background
   // resources from system proxy monitoring that can't be cleaned up.
-  context_builder.set_proxy_resolution_service(
-      net::ConfiguredProxyResolutionService::CreateDirect());
+    //  context_builder.set_proxy_resolution_service(
+    //      net::ConfiguredProxyResolutionService::CreateDirect());
+
+    // 默认不用系统代理监听，但如果配置了固定代理规则，则使用固定代理配置。
+    if (context_config_->proxy_rules.has_value() &&
+     !context_config_->proxy_rules->empty()) {
+    net::ProxyConfig proxy_config;
+    proxy_config.proxy_rules().ParseFromString(
+       *context_config_->proxy_rules,
+       /*allow_bracketed_proxy_chains=*/false,
+       /*is_quic_allowed=*/false);
+
+    context_builder.set_proxy_config_service(
+       std::make_unique<net::ProxyConfigServiceFixed>(
+           net::ProxyConfigWithAnnotation(proxy_config,
+                                          TRAFFIC_ANNOTATION_FOR_TESTS)));
+    } else {
+    context_builder.set_proxy_config_service(
+       std::make_unique<net::ProxyConfigServiceFixed>(
+           net::ProxyConfigWithAnnotation::CreateDirect()));
+    }
 
   if (context_config_->enable_network_quality_estimator) {
     std::unique_ptr<net::NetworkQualityEstimatorParams> nqe_params =
