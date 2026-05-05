@@ -41,6 +41,7 @@
 #include "net/http/http_server_properties.h"
 #include "net/log/net_log.h"
 #include "net/nqe/network_quality_estimator_params.h"
+#include "net/proxy_resolution/proxy_config.h"
 #include "net/quic/set_quic_flag.h"
 #include "net/socket/client_socket_pool_manager.h"
 #include "net/socket/custom_client_socket_factory.h"
@@ -53,8 +54,6 @@
 #include "net/third_party/quiche/src/quiche/quic/core/quic_types.h"
 #include "net/url_request/url_request_context_builder.h"
 #include "url/origin.h"
-
-
 
 #if BUILDFLAG(ENABLE_REPORTING)
 #include "net/reporting/reporting_policy.h"
@@ -353,7 +352,6 @@ bool NormalizeProxyServerFromExperimentalOptions(
   *out_proxy_rules = std::move(proxy_uri);
   return true;
 }
-
 
 }  // namespace
 
