@@ -18,10 +18,12 @@
 #include "base/metrics/field_trial_params.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "components/cronet/cronet_proxy_delegate.h"
+#include "net/base/proxy_string_util.h"
 #include "net/base/address_family.h"
 #include "net/base/ip_address.h"
 #include "net/base/url_util.h"
@@ -51,6 +53,8 @@
 #include "net/third_party/quiche/src/quiche/quic/core/quic_types.h"
 #include "net/url_request/url_request_context_builder.h"
 #include "url/origin.h"
+
+
 
 #if BUILDFLAG(ENABLE_REPORTING)
 #include "net/reporting/reporting_policy.h"
@@ -289,6 +293,68 @@ auto map(std::optional<T> maybe, F&& f) {
   return std::optional<std::invoke_result_t<F, T>>(f(maybe.value()));
 }
 
+bool NormalizeProxyServerFromExperimentalOptions(
+    base::Value::Dict* experimental_options,
+    std::optional<std::string>* out_proxy_rules) {
+  CHECK(experimental_options);
+  CHECK(out_proxy_rules);
+
+  const base::Value* proxy_server_value =
+      experimental_options->Find("proxy_server");
+  if (!proxy_server_value) {
+    return true;
+  }
+
+  if (!proxy_server_value->is_string()) {
+    LOG(ERROR) << "\"proxy_server\" must be a string";
+    return false;
+  }
+
+  std::string proxy_uri = proxy_server_value->GetString();
+  base::TrimWhitespaceASCII(proxy_uri, base::TRIM_ALL, &proxy_uri);
+
+  if (proxy_uri.empty()) {
+    LOG(ERROR) << "\"proxy_server\" must not be empty";
+    return false;
+  }
+
+  // 这一版不支持认证
+  if (proxy_uri.find('@') != std::string::npos) {
+    LOG(ERROR) << "\"proxy_server\" auth is not supported yet: " << proxy_uri;
+    return false;
+  }
+
+  // 这一版不支持链式代理/多代理
+  if (proxy_uri.find(',') != std::string::npos ||
+      proxy_uri.find(';') != std::string::npos ||
+      proxy_uri.find('[') != std::string::npos ||
+      proxy_uri.find(']') != std::string::npos) {
+    LOG(ERROR) << "\"proxy_server\" multi-proxy chain is not supported yet: "
+               << proxy_uri;
+    return false;
+  }
+
+  if (base::EqualsCaseInsensitiveASCII(proxy_uri, "direct")) {
+    proxy_uri = "direct://";
+  }
+
+  // 用 Chromium 原生 parser 提前校验合法性。
+  net::ProxyConfig::ProxyRules proxy_rules;
+  proxy_rules.ParseFromString(proxy_uri,
+                              /*allow_bracketed_proxy_chains=*/false,
+                              /*is_quic_allowed=*/false);
+
+  if (proxy_rules.type == net::ProxyConfig::ProxyRules::Type::EMPTY) {
+    LOG(ERROR) << "Invalid \"proxy_server\": " << proxy_uri;
+    return false;
+  }
+
+  experimental_options->Remove("proxy_server");
+  *out_proxy_rules = std::move(proxy_uri);
+  return true;
+}
+
+
 }  // namespace
 
 URLRequestContextConfig::QuicHint::QuicHint(const std::string& host,
@@ -329,6 +395,7 @@ URLRequestContextConfig::URLRequestContextConfig(
     bool enable_network_quality_estimator,
     bool bypass_public_key_pinning_for_local_trust_anchors,
     std::optional<int> network_thread_priority,
+    std::optional<std::string> proxy_rules,
     std::optional<cronet::proto::ProxyOptions> proxy_options)
     : enable_quic(enable_quic),
       enable_spdy(enable_spdy),
@@ -348,6 +415,7 @@ URLRequestContextConfig::URLRequestContextConfig(
       network_thread_priority(network_thread_priority),
       bidi_stream_detect_broken_connection(false),
       heartbeat_interval(base::Seconds(0)),
+      proxy_rules(std::move(proxy_rules)),
       proxy_options(std::move(proxy_options)) {
   SetContextConfigExperimentalOptions();
 }
@@ -371,24 +439,41 @@ URLRequestContextConfig::CreateURLRequestContextConfig(
     bool enable_network_quality_estimator,
     bool bypass_public_key_pinning_for_local_trust_anchors,
     std::optional<int> network_thread_priority,
+    std::optional<std::string> proxy_rules,
     std::optional<cronet::proto::ProxyOptions> proxy_options) {
-  std::optional<base::Value::Dict> experimental_options =
-      ParseExperimentalOptions(unparsed_experimental_options);
-  if (!experimental_options) {
-    // For the time being maintain backward compatibility by only failing to
-    // parse when DCHECKs are enabled.
-    if (ExperimentalOptionsParsingIsAllowedToFail())
-      return nullptr;
-    else
-      experimental_options = base::Value::Dict();
-  }
-  return base::WrapUnique(new URLRequestContextConfig(
-      enable_quic, enable_spdy, enable_brotli, http_cache, http_cache_max_size,
-      load_disable_cache, storage_path, accept_language, user_agent,
-      std::move(experimental_options).value(), std::move(mock_cert_verifier),
-      enable_network_quality_estimator,
-      bypass_public_key_pinning_for_local_trust_anchors,
-      network_thread_priority, std::move(proxy_options)));
+    std::optional<base::Value::Dict> experimental_options =
+        ParseExperimentalOptions(unparsed_experimental_options);
+    if (!experimental_options) {
+      // For the time being maintain backward compatibility by only failing to
+      // parse when DCHECKs are enabled.
+      if (ExperimentalOptionsParsingIsAllowedToFail())
+        return nullptr;
+      else
+        experimental_options = base::Value::Dict();
+    }
+
+    // 如果调用方没有显式传 proxy_rules，则允许从
+    // experimental_options.proxy_server 自动构建。
+    // 这一版只支持单代理，不支持认证，不支持链式代理。
+    if (!proxy_rules.has_value()) {
+      std::optional<std::string> parsed_proxy_rules;
+      if (!NormalizeProxyServerFromExperimentalOptions(&*experimental_options,
+                                                       &parsed_proxy_rules)) {
+        LOG(ERROR) << "Failed to parse \"proxy_server\" from experimental options";
+        if (ExperimentalOptionsParsingIsAllowedToFail())
+          return nullptr;
+      } else if (parsed_proxy_rules.has_value()) {
+        proxy_rules = std::move(parsed_proxy_rules);
+      }
+    }
+
+    return base::WrapUnique(new URLRequestContextConfig(
+        enable_quic, enable_spdy, enable_brotli, http_cache, http_cache_max_size,
+        load_disable_cache, storage_path, accept_language, user_agent,
+        std::move(experimental_options).value(), std::move(mock_cert_verifier),
+        enable_network_quality_estimator,
+        bypass_public_key_pinning_for_local_trust_anchors,
+        network_thread_priority, std::move(proxy_rules), std::move(proxy_options)));
 }
 
 // static
@@ -1082,13 +1167,14 @@ URLRequestContextConfigBuilder::~URLRequestContextConfigBuilder() = default;
 
 std::unique_ptr<URLRequestContextConfig>
 URLRequestContextConfigBuilder::Build() {
-  return URLRequestContextConfig::CreateURLRequestContextConfig(
-      enable_quic, enable_spdy, enable_brotli, http_cache, http_cache_max_size,
-      load_disable_cache, storage_path, accept_language, user_agent,
-      experimental_options, std::move(mock_cert_verifier),
-      enable_network_quality_estimator,
-      bypass_public_key_pinning_for_local_trust_anchors,
-      network_thread_priority, std::optional<cronet::proto::ProxyOptions>());
+    return URLRequestContextConfig::CreateURLRequestContextConfig(
+        enable_quic, enable_spdy, enable_brotli, http_cache, http_cache_max_size,
+        load_disable_cache, storage_path, accept_language, user_agent,
+        experimental_options, std::move(mock_cert_verifier),
+        enable_network_quality_estimator,
+        bypass_public_key_pinning_for_local_trust_anchors,
+        network_thread_priority, std::move(proxy_rules),
+        std::optional<cronet::proto::ProxyOptions>());
 }
 
 }  // namespace cronet
